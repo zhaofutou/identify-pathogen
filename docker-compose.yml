@@ -9,8 +9,8 @@ services:
       - ./outbreak_data:/data/reads:ro
       # Use already downloaded references from WSL2 host
       - /root/biolab/refs:/data/refs:ro
-      # Use Kraken2 database from WSL2 host
-      - /root/outbreak_investigation/kraken2_db:/data/kraken2:ro
+      # Use Kraken2 database from local project directory
+      - ./kraken2_db:/data/kraken2:ro
       # Persistent volumes for results, work, and uploads
       - biolab-results:/data/results
       - biolab-work:/data/work
