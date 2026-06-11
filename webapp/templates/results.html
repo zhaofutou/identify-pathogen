@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Results — BioLab</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',-apple-system,system-ui,sans-serif;background:#0f1117;color:#dfe6e9;min-height:100vh}
+.nav{display:flex;align-items:center;gap:20px;padding:15px 30px;background:#15171f;border-bottom:1px solid #2a2d3a}
+.nav a{color:#636e72;text-decoration:none;font-size:.9em}.nav a:hover{color:#6c5ce7}
+.nav .title{color:#fff;font-weight:600;font-size:1.1em}
+.container{max-width:1000px;margin:40px auto;padding:0 20px}
+h1{font-size:1.8em;margin-bottom:20px}
+.card{background:#1a1d27;border:1px solid #2a2d3a;border-radius:12px;padding:30px;margin-bottom:20px}
+.card h2{color:#6c5ce7;font-size:1.1em;margin-bottom:15px}
+table{width:100%;border-collapse:collapse;font-size:.9em}
+th{text-align:left;padding:10px 12px;border-bottom:2px solid #2a2d3a;color:#00cec9;font-weight:600}
+td{padding:8px 12px;border-bottom:1px solid #2a2d3a}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+.stat{background:#15171f;padding:15px;border-radius:8px;text-align:center}
+.stat .val{font-size:1.5em;font-weight:700;color:#00cec9}.stat .lbl{font-size:.8em;color:#636e72;margin-top:4px}
+pre{background:#15171f;border:1px solid #2a2d3a;border-radius:8px;padding:16px;overflow-x:auto;font-size:.85em;font-family:'Cascadia Code',monospace}
+.loading{text-align:center;padding:60px;color:#636e72}
+.btn{display:inline-block;background:#6c5ce7;color:#fff;padding:8px 20px;border-radius:8px;text-decoration:none;font-size:.9em;margin-top:10px}
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:.78em;font-weight:600}
+.badge-hot{background:rgba(225,112,85,.15);color:#e17055}
+.badge-warm{background:rgba(253,203,110,.15);color:#fdcb6e}
+.badge-cold{background:rgba(99,110,114,.15);color:#636e72}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <a href="/">← Home</a>
+  <span class="title" id="pageTitle">Loading results...</span>
+</div>
+
+<div class="container">
+  <div id="content">
+    <div class="loading">Loading results...</div>
+  </div>
+</div>
+
+<script>
+const jobId='{{ job_id }}';
+let jobData=null;
+
+function poll(){
+  fetch('/api/job/'+jobId).then(r=>r.json()).then(d=>{
+    jobData=d;
+    document.getElementById('pageTitle').textContent=
+      (d.type==='assembly'?'🦠 Assembly':'🕵️ Outbreak')+' — '+jobId;
+    if(d.status==='completed')renderResults(d);
+    else if(d.status==='error')renderError(d);
+    else setTimeout(poll,2000);
+  });
+}
+
+function renderError(d){
+  document.getElementById('content').innerHTML=`
+    <div class="card"><h2>❌ Error</h2><pre>${d.error||'Unknown error'}</pre></div>`;
+}
+
+function renderResults(d){
+  const c=document.getElementById('content');
+  if(d.type==='assembly')renderAssembly(c,d);
+  else renderOutbreak(c,d);
+}
+
+function renderAssembly(c,d){
+  const r=d.result||{};
+  const asm=r.assembly||{};
+  const quast=r.quast||{};
+  const ann=r.annotation||{};
+
+  c.innerHTML=`
+    <h1>✅ Assembly Complete</h1>
+    <div class="card">
+      <h2>📊 Assembly Statistics</h2>
+      <div class="stat-grid">
+        <div class="stat"><div class="val">${(asm.total_length/1e6||0).toFixed(2)}</div><div class="lbl">Total Length (Mb)</div></div>
+        <div class="stat"><div class="val">${asm.num_scaffolds||'-'}</div><div class="lbl">Scaffolds</div></div>
+        <div class="stat"><div class="val">${(asm.n50/1e3||0).toFixed(1)}</div><div class="lbl">N50 (kb)</div></div>
+        <div class="stat"><div class="val">${(asm.longest/1e6||0).toFixed(2)}</div><div class="lbl">Longest (Mb)</div></div>
+        <div class="stat"><div class="val">${asm.gc||'-'}</div><div class="lbl">GC %</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>🏷️ Annotation</h2>
+      <div class="stat-grid">
+        <div class="stat"><div class="val">${ann.CDS||'-'}</div><div class="lbl">Protein-coding genes</div></div>
+        <div class="stat"><div class="val">${ann.rRNA||'-'}</div><div class="lbl">rRNA genes</div></div>
+        <div class="stat"><div class="val">${ann.tRNA||'-'}</div><div class="lbl">tRNA genes</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>📋 QUAST Quality</h2>
+      <table>
+        ${Object.entries(quast).map(([k,v])=>`<tr><td>${k.replace(/_/g,' ')}</td><td>${v}</td></tr>`).join('')}
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>📦 Output Files</h2>
+      <p style="color:#636e72;font-size:.9em">Job ID: ${jobId}</p>
+      <p style="color:#636e72;font-size:.9em;margin-top:5px">Files saved to: /root/biolab/results/${jobId}/</p>
+    </div>`;
+}
+
+function renderOutbreak(c,d){
+  const r=d.result||{};
+  const samples=r.samples||{};
+  const summary=r.summary||{};
+
+  let suspectHtml='';
+  if(summary.suspects&&summary.suspects.length>0){
+    const top=summary.suspects[0];
+    const avgDepth=top.avg_depth||0;
+    const avgCov=top.avg_genome_coverage||0;
+    const avgRate=top.avg_mapping_rate||0;
+    suspectHtml=`
+      <div style="background:linear-gradient(135deg,rgba(225,112,85,.1),rgba(253,203,110,.05));border:2px solid #e17055;border-radius:12px;padding:25px;margin-bottom:20px;text-align:center">
+        <h2 style="color:#e17055;font-size:1.4em">🔍 Most Likely Culprit: ${top.pathogen.replace(/_/g,' ')}</h2>
+        <p>Detected in ${top.positive_samples} of ${summary.total_samples} samples</p>
+        <div style="display:flex;justify-content:center;gap:30px;margin-top:12px;flex-wrap:wrap">
+          <div><span style="font-size:1.3em;font-weight:700;color:#00cec9">${avgDepth.toFixed(1)}×</span><br><small style="color:#636e72">Avg Depth</small></div>
+          <div><span style="font-size:1.3em;font-weight:700;color:#00cec9">${avgCov.toFixed(1)}%</span><br><small style="color:#636e72">Avg Coverage</small></div>
+          <div><span style="font-size:1.3em;font-weight:700;color:#00cec9">${avgRate.toFixed(1)}%</span><br><small style="color:#636e72">Avg Mapping Rate</small></div>
+        </div>
+        <p style="font-size:.85em;color:#636e72;margin-top:8px">Samples: ${top.samples.join(', ')}</p>
+      </div>`;
+  }
+
+  // Aggregate pathogens across samples
+  const allP={};
+  for(const[sname,sdata] of Object.entries(samples)){
+    for(const[pname,pdata] of Object.entries(sdata.pathogens||{})){
+      if(!allP[pname])allP[pname]={hits:[]};
+      allP[pname].hits.push({sample:sname,...pdata});
+    }
+  }
+
+  const sorted=Object.entries(allP).sort((a,b)=>{
+    const da=a[1].hits.reduce((s,h)=>s+(h.avg_depth||h.percentage||0),0)/a[1].hits.length;
+    const db=b[1].hits.reduce((s,h)=>s+(h.avg_depth||h.percentage||0),0)/b[1].hits.length;
+    return db-da;
+  });
+
+  c.innerHTML=`
+    <h1>🔍 Investigation Results</h1>
+    ${suspectHtml}
+
+    <div class="card">
+      <h2>📊 Pathogen Detection Summary</h2>
+      <table>
+        <thead><tr><th>Pathogen</th><th>Hits</th><th>Avg Score</th><th>Samples</th></tr></thead>
+        <tbody>
+        ${sorted.map(([pname,data])=>{
+          const avg=data.hits.reduce((s,h)=>s+(h.avg_depth||h.percentage||0),0)/data.hits.length;
+          const covs=data.hits.map(h=>h.genome_coverage||0);
+          const avgCov=(covs.reduce((s,v)=>s+v,0)/covs.length).toFixed(1);
+          let badge='badge-cold',label='Negative';
+          if(avg>100){badge='badge-hot';label='🔴 Strong'}
+          else if(avg>10){badge='badge-warm';label='🟡 Weak'}
+          return `<tr>
+            <td>${pname.replace(/_/g,' ')}</td>
+            <td>${data.hits.length}</td>
+            <td>${avg.toFixed(1)}× | ${avgCov}% cov</td>
+            <td>${data.hits.map(h=>h.sample).join(', ')}</td>
+            <td><span class="badge ${badge}">${label}</span></td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>📋 Sample Details</h2>
+      <table>
+        <thead><tr><th>Sample</th><th>Type</th><th>Top Hit</th><th>Depth</th><th>Method</th></tr></thead>
+        <tbody>
+        ${Object.entries(samples).map(([sname,sdata])=>{
+          const top=Object.entries(sdata.pathogens||{}).sort((a,b)=>(b[1].avg_depth||b[1].percentage||0)-(a[1].avg_depth||a[1].percentage||0))[0];
+          return `<tr>
+            <td>${sname}</td>
+            <td>${sdata.type||'-'}</td>
+            <td>${top?top[0].replace(/_/g,' '):'-'}</td>
+            <td>${top?(top[1].avg_depth||top[1].percentage||0).toFixed(1)+'×':'-'}</td>
+            <td>${sdata.method||'-'}</td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>📦 Output Files</h2>
+      <p style="color:#636e72;font-size:.9em">Job ID: ${jobId}</p>
+      <p style="color:#636e72;font-size:.9em;margin-top:5px">Results saved to: /root/biolab/results/${jobId}/results.json</p>
+    </div>`;
+}
+
+poll();
+</script>
+</body>
+</html>

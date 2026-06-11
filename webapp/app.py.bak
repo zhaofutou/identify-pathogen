@@ -1,0 +1,664 @@
+#!/usr/bin/env python3
+"""
+BioLab Service — Genome Assembly & Outbreak Investigation
+==========================================================
+A web service for:
+  1. Bacterial genome assembly from Illumina paired-end reads
+  2. Pathogen identification from Nanopore metagenomic reads
+
+Runs on WSL2 with access to all CPU cores and RAM.
+Accessible from any PC on the local network.
+"""
+
+import os
+import sys
+import json
+import time
+import uuid
+import shutil
+import subprocess
+import threading
+from datetime import datetime
+from pathlib import Path
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
+
+app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024 * 1024  # 50GB max upload
+
+# ─── Detect runtime environment ─────────────────────────────────
+def _is_wsl():
+    """Check if we're running inside WSL2."""
+    try:
+        with open('/proc/version', 'r') as f:
+            return 'microsoft' in f.read().lower()
+    except:
+        return False
+
+RUNNING_IN_WSL = _is_wsl()
+
+# ─── Configuration ───────────────────────────────────────────────
+BASE_DIR = Path('/root/biolab')
+UPLOAD_DIR = BASE_DIR / 'uploads'
+RESULTS_DIR = BASE_DIR / 'results'
+WORK_DIR = BASE_DIR / 'work'
+REFS_DIR = BASE_DIR / 'refs'
+
+for d in [UPLOAD_DIR, RESULTS_DIR, WORK_DIR, REFS_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
+
+# Track running jobs
+jobs = {}  # job_id -> {status, progress, result, ...}
+
+# ─── Pathogen Reference Panel ───────────────────────────────────
+PATHOGEN_PANEL = {
+    'Salmonella_enterica': 'NC_003197.2',
+    'Escherichia_coli_O157_H7': 'NC_002655.2',
+    'Shigella_flexneri_2a': 'NC_008258.1',
+    'Campylobacter_jejuni': 'NC_002163.1',
+    'Vibrio_cholerae_O1': 'NC_002505.1',
+    'Clostridioides_difficile': 'NC_009089.1',
+    'Listeria_monocytogenes': 'NC_003210.1',
+    'Aeromonas_hydrophila': 'NC_008570.1',
+    'Norovirus_GII': 'NC_008228.1',
+    'Rotavirus_A': 'NC_004526.1',
+    'Adenovirus_40': 'NC_001454.1',
+    'Astrovirus': 'NC_001943.1',
+    'Cryptosporidium_parvum': 'NC_006982.2',
+}
+
+
+# ─── Helper Functions ────────────────────────────────────────────
+def run_cmd(cmd, timeout=3600, in_wsl=False):
+    """Run a shell command and return output.
+    
+    Args:
+        cmd: Command to run
+        timeout: Timeout in seconds
+        in_wsl: If True, wrap command with wsl.exe -d Ubuntu -- bash -c "..."
+    """
+    if in_wsl and not RUNNING_IN_WSL:
+        # Escape quotes for WSL wrapping
+        escaped = cmd.replace('"', '\\"')
+        cmd = f'wsl.exe -d Ubuntu -- bash -c "{escaped}"'
+    try:
+        result = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, timeout=timeout
+        )
+        return result.stdout + result.stderr, result.returncode
+    except subprocess.TimeoutExpired:
+        return 'Command timed out', 1
+    except Exception as e:
+        return str(e), 1
+
+
+# ─── WSL2 Path Helpers ──────────────────────────────────────────
+WSL_PREFIX = '/root'  # WSL2 filesystem root
+
+def wsl_path_exists(wsl_path):
+    """Check if a path exists in WSL2."""
+    out, rc = run_cmd(f'test -e {wsl_path} && echo YES || echo NO', in_wsl=True)
+    return 'YES' in out
+
+def wsl_dir_size(wsl_path):
+    """Get directory size in bytes in WSL2."""
+    out, rc = run_cmd(f'du -sb {wsl_path} 2>/dev/null | cut -f1', in_wsl=True)
+    try:
+        return int(out.strip())
+    except:
+        return 0
+
+
+def update_job(job_id, **kwargs):
+    """Update job status."""
+    if job_id in jobs:
+        jobs[job_id].update(kwargs)
+
+
+# ─── Genome Assembly Pipeline ────────────────────────────────────
+def run_assembly(job_id, r1_path, r2_path, threads=16, memory=32):
+    """Run the full genome assembly pipeline."""
+    try:
+        update_job(job_id, status='running', step='Preparing files')
+
+        job_dir = RESULTS_DIR / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy uploaded files to work directory (symlinks need admin on Windows)
+        links_dir = WORK_DIR / job_id
+        links_dir.mkdir(parents=True, exist_ok=True)
+
+        r1_link = links_dir / 'R1.fastq.gz'
+        r2_link = links_dir / 'R2.fastq.gz'
+        shutil.copy2(r1_path, r1_link)
+        shutil.copy2(r2_path, r2_link)
+
+        # Step 1: FastQC
+        update_job(job_id, step='Running FastQC', progress=10)
+        fastqc_dir = job_dir / 'fastqc'
+        fastqc_dir.mkdir(exist_ok=True)
+        run_cmd(f'fastqc -t {threads} -o {fastqc_dir} {r1_link} {r2_link}')
+
+        # Step 2: SPAdes assembly
+        update_job(job_id, step='Running SPAdes assembly', progress=25)
+        spades_dir = job_dir / 'spades'
+        spades_cmd = (
+            f'spades.py --isolate '
+            f'-1 {r1_link} -2 {r2_link} '
+            f'-o {spades_dir} '
+            f'-t {threads} -m {memory} '
+            f'--cov-cutoff auto 2>&1'
+        )
+        run_cmd(spades_cmd, timeout=1800)
+
+        # Step 3: QUAST evaluation
+        update_job(job_id, step='Running QUAST evaluation', progress=60)
+        quast_dir = job_dir / 'quast'
+        quast_cmd = (
+            f'python3 /usr/local/bin/quast.py '
+            f'{spades_dir}/scaffolds.fasta '
+            f'-o {quast_dir} -t {threads} 2>&1'
+        )
+        run_cmd(quast_cmd, timeout=300)
+
+        # Step 4: Prokka annotation
+        update_job(job_id, step='Running Prokka annotation', progress=70)
+        prokka_dir = job_dir / 'prokka'
+        prokka_cmd = (
+            f'prokka --outdir {prokka_dir} '
+            f'--genus Salmonella --species enterica '
+            f'--cpus {threads} '
+            f'--prefix assembly '
+            f'{spades_dir}/scaffolds.fasta 2>&1'
+        )
+        run_cmd(prokka_cmd, timeout=600)
+
+        # Step 5: Collect stats
+        update_job(job_id, step='Generating report', progress=90)
+
+        stats = collect_assembly_stats(spades_dir, quast_dir, prokka_dir)
+
+        # Save results JSON
+        with open(job_dir / 'results.json', 'w') as f:
+            json.dump(stats, f, indent=2)
+
+        update_job(job_id, status='completed', progress=100, result=stats,
+                   step='Complete')
+
+    except Exception as e:
+        update_job(job_id, status='error', error=str(e))
+
+
+def collect_assembly_stats(spades_dir, quast_dir, prokka_dir):
+    """Collect assembly statistics."""
+    stats = {
+        'timestamp': datetime.now().isoformat(),
+        'assembly': {},
+        'quast': {},
+        'annotation': {},
+    }
+
+    # SPAdes stats
+    scaffolds = spades_dir / 'scaffolds.fasta'
+    if scaffolds.exists():
+        result = run_cmd(
+            f'python3 -c \"'
+            f'from Bio import SeqIO; '
+            f'lengths = [len(r.seq) for r in SeqIO.parse(\\\"{scaffolds}\\\", \\\"fasta\\\")]; '
+            f'lengths.sort(reverse=True); '
+            f'total = sum(lengths); '
+            f'n50 = 0; cumsum = 0; '
+            f'for l in lengths: cumsum += l; '
+            f'if cumsum >= total/2: n50 = l; break; '
+            f'print(json.dumps({{'
+            f'\\\"total_length\\\": total, '
+            f'\\\"num_scaffolds\\\": len(lengths), '
+            f'\\\"n50\\\": n50, '
+            f'\\\"longest\\\": lengths[0] if lengths else 0, '
+            f'\\\"gc\\\": round(sum(1 for r in SeqIO.parse(\\\"{scaffolds}\\\", \\\"fasta\\\") for c in str(r.seq) if c in \\\"GC\\\") / total * 100, 2) '
+            f'}}))\"'
+        )
+        try:
+            stats['assembly'] = json.loads(result[0].strip())
+        except:
+            stats['assembly'] = {'error': 'Could not parse stats'}
+
+    # QUAST stats
+    quast_report = quast_dir / 'report.tsv'
+    if quast_report.exists():
+        with open(quast_report) as f:
+            lines = f.readlines()
+            for line in lines:
+                parts = line.strip().split('\t')
+                if len(parts) >= 2:
+                    key = parts[0].strip().lower().replace(' ', '_').replace('#', 'num')
+                    val = parts[1].strip()
+                    if val.replace('.', '').replace(',', '').isdigit():
+                        stats['quast'][key] = val
+
+    # Prokka stats
+    prokka_txt = prokka_dir / 'assembly.txt'
+    if prokka_txt.exists():
+        with open(prokka_txt) as f:
+            for line in f:
+                if ':' in line:
+                    key, val = line.strip().split(':', 1)
+                    stats['annotation'][key.strip()] = val.strip()
+
+    return stats
+
+
+# ─── Outbreak Investigation Pipeline ─────────────────────────────
+def run_outbreak(job_id, sample_files, sample_metadata, threads=8):
+    """Run pathogen identification pipeline."""
+    try:
+        update_job(job_id, status='running', step='Preparing samples')
+
+        job_dir = RESULTS_DIR / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create sample directory
+        samples_dir = WORK_DIR / job_id / 'samples'
+        samples_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy uploaded files (symlinks need admin on Windows)
+        sample_paths = []
+        for i, (fname, fpath) in enumerate(sample_files):
+            dest = samples_dir / fname
+            shutil.copy2(fpath, dest)
+            sample_paths.append((fname, dest, sample_metadata.get(i, 'unknown')))
+
+        # Check for Kraken2 database (via WSL2)
+        kraken2_db = '/root/outbreak_investigation/kraken2_db'
+        use_kraken2 = wsl_path_exists(f'{kraken2_db}/hash.k2d')
+
+        results = {}
+        total = len(sample_paths)
+
+        for idx, (name, path, stype) in enumerate(sample_paths):
+            progress = 10 + int(80 * idx / total)
+            update_job(job_id,
+                       step=f'Analyzing sample {idx+1}/{total}: {name}',
+                       progress=progress)
+
+            sample_result = {'name': name, 'type': stype, 'pathogens': {}}
+
+            if use_kraken2:
+                # Kraken2 classification (run in WSL2)
+                report_file = job_dir / f'{name}_kraken2_report.txt'
+                # Report file is on Windows, but we run kraken2 in WSL2
+                wsl_report = f'/tmp/kraken2_{name}_report.txt'
+                wsl_path_str = str(path).replace('\\', '/')
+                # Map Windows path to WSL2 path
+                if wsl_path_str.startswith('C:') or wsl_path_str.startswith('c:'):
+                    wsl_sample_path = '/mnt/' + wsl_path_str[0].lower() + wsl_path_str[2:]
+                else:
+                    wsl_sample_path = wsl_path_str
+                
+                cmd = (
+                    f'kraken2 --db {kraken2_db} '
+                    f'--threads {threads} '
+                    f'--report {wsl_report} '
+                    f'--output /dev/null '
+                    f'{wsl_sample_path} 2>&1'
+                )
+                out, rc = run_cmd(cmd, timeout=600, in_wsl=True)
+                
+                # Copy report back from WSL2
+                run_cmd(f'cat {wsl_report}', in_wsl=True)
+                # Read the report from WSL2
+                report_out, _ = run_cmd(f'cat {wsl_report}', in_wsl=True)
+                if report_out.strip():
+                    report_file.write_text(report_out)
+                    sample_result['pathogens'] = parse_kraken2_report_text(report_out)
+                    sample_result['method'] = 'kraken2'
+            else:
+                # Fallback: minimap2 against pathogen panel
+                sample_result['pathogens'] = run_minimap2_panel(
+                    path, job_dir, name, threads
+                )
+                sample_result['method'] = 'minimap2'
+
+            results[name] = sample_result
+
+        # Generate summary
+        update_job(job_id, step='Generating outbreak report', progress=95)
+        summary = generate_outbreak_summary(results)
+
+        # Save
+        with open(job_dir / 'results.json', 'w') as f:
+            json.dump({'samples': results, 'summary': summary}, f, indent=2)
+
+        update_job(job_id, status='completed', progress=100,
+                   result={'samples': results, 'summary': summary},
+                   step='Complete')
+
+    except Exception as e:
+        update_job(job_id, status='error', error=str(e))
+
+
+def run_minimap2_panel(reads_path, job_dir, sample_name, threads):
+    """Map reads against pathogen panel using minimap2 (via WSL2)."""
+    results = {}
+    for pathogen, accession in PATHOGEN_PANEL.items():
+        ref_file = REFS_DIR / f'{accession}.fasta'
+        wsl_ref = f'/root/biolab/refs/{accession}.fasta'
+
+        # Download reference if needed (via WSL2 curl)
+        if not ref_file.exists() or ref_file.stat().st_size < 100:
+            url = (
+                f'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?'
+                f'db=nucleotide&id={accession}&rettype=fasta&retmode=text'
+            )
+            run_cmd(f'curl -sL -o {wsl_ref} {url} --connect-timeout 30 --max-time 120', in_wsl=True)
+            # Also copy to Windows path for caching
+            run_cmd(f'cp {wsl_ref} /mnt/c/Users/rdpuser/bacterial_assemble/webapp/../refs/{accession}.fasta 2>/dev/null', in_wsl=True)
+
+        # Map Windows path to WSL2 path
+        wsl_reads = str(reads_path).replace('\\', '/')
+        if wsl_reads.startswith('C:') or wsl_reads.startswith('c:'):
+            wsl_reads = '/mnt/' + wsl_reads[0].lower() + wsl_reads[2:]
+        
+        wsl_job_dir = str(job_dir).replace('\\', '/')
+        if wsl_job_dir.startswith('C:') or wsl_job_dir.startswith('c:'):
+            wsl_job_dir = '/mnt/' + wsl_job_dir[0].lower() + wsl_job_dir[2:]
+
+        outprefix = f'{wsl_job_dir}/{sample_name}_vs_{pathogen}'
+        sam = f'{outprefix}.sam'
+        bam = f'{outprefix}.bam'
+
+        run_cmd(f'minimap2 -ax map-ont -t {threads} {wsl_ref} {wsl_reads} > {sam} 2>/dev/null', in_wsl=True)
+        run_cmd(f'samtools sort -@ 4 -o {bam} {sam}', in_wsl=True)
+        run_cmd(f'samtools index {bam}', in_wsl=True)
+
+        # Stats
+        flagstat, _ = run_cmd(f'samtools flagstat {bam}', in_wsl=True)
+        depth_out, _ = run_cmd(f'samtools depth {bam}', in_wsl=True)
+
+        # Parse
+        mapped = 0
+        total = 0
+        for line in flagstat.split('\n'):
+            if 'mapped (' in line and 'primary' not in line:
+                try: mapped = int(line.split('+')[0].strip())
+                except: pass
+            if '+ 0 in total' in line:
+                try: total = int(line.split('+')[0].strip())
+                except: pass
+
+        depths = []
+        for line in depth_out.strip().split('\n')[:50000]:  # Limit for speed
+            parts = line.split('\t')
+            if len(parts) >= 3:
+                try: depths.append(int(parts[2]))
+                except: pass
+
+        avg_depth = sum(depths) / len(depths) if depths else 0
+        mapping_rate = (mapped / total * 100) if total > 0 else 0
+
+        # Get ref length
+        ref_len = 0
+        ref_cat, _ = run_cmd(f'grep -v "^>" {wsl_ref} | tr -d "\\n" | wc -c', in_wsl=True)
+        try:
+            ref_len = int(ref_cat.strip())
+        except:
+            pass
+
+        covered = sum(1 for d in depths if d > 0)
+        genome_cov = (covered / ref_len * 100) if ref_len > 0 else 0
+
+        results[pathogen] = {
+            'accession': accession,
+            'mapping_rate': round(mapping_rate, 2),
+            'avg_depth': round(avg_depth, 1),
+            'genome_coverage': round(genome_cov, 2),
+            'mapped_reads': mapped,
+            'total_reads': total,
+        }
+
+        # Cleanup
+        for ext in ['.sam', '.bam', '.bam.bai']:
+            f = f'{outprefix}{ext}'
+            run_cmd(f'rm -f {f}', in_wsl=True)
+
+    return results
+
+
+def parse_kraken2_report(report_file):
+    """Parse Kraken2 report file into pathogen results."""
+    with open(report_file) as f:
+        return parse_kraken2_report_text(f.read())
+
+
+def parse_kraken2_report_text(report_text):
+    """Parse Kraken2 report text into pathogen results."""
+    results = {}
+    for line in report_text.strip().split('\n'):
+        parts = line.strip().split('\t')
+        if len(parts) >= 6:
+            pct = float(parts[0])
+            reads = int(parts[1])
+            taxid = parts[4]
+            name = parts[5].strip()
+            if pct > 0.5 and taxid != '0':  # >0.5% and classified
+                results[name] = {
+                    'percentage': pct,
+                    'reads': reads,
+                    'taxid': taxid,
+                }
+    return results
+
+
+def generate_outbreak_summary(results):
+    """Generate a summary of the outbreak investigation."""
+    summary = {
+        'total_samples': len(results),
+        'suspects': [],
+        'top_hit_per_sample': {},
+    }
+
+    # Count pathogen occurrences
+    pathogen_counts = {}
+    for sname, sdata in results.items():
+        best = None
+        best_score = 0
+        for pname, pdata in sdata['pathogens'].items():
+            if sdata['method'] == 'kraken2':
+                score = pdata.get('percentage', 0)
+            else:
+                score = pdata.get('avg_depth', 0)
+
+            if score > best_score:
+                best_score = score
+                best = pname
+
+            if pname not in pathogen_counts:
+                pathogen_counts[pname] = {'count': 0, 'samples': []}
+            pathogen_counts[pname]['count'] += 1
+            pathogen_counts[pname]['samples'].append(sname)
+
+        if best:
+            summary['top_hit_per_sample'][sname] = best
+
+    # Rank suspects
+    for pname, data in sorted(pathogen_counts.items(),
+                               key=lambda x: -x[1]['count']):
+        if data['count'] >= 2:  # Present in 2+ samples
+            summary['suspects'].append({
+                'pathogen': pname,
+                'positive_samples': data['count'],
+                'samples': data['samples'],
+            })
+
+    return summary
+
+
+# ─── Flask Routes ────────────────────────────────────────────────
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+
+@app.route('/assembly')
+def assembly_page():
+    return render_template('assembly.html')
+
+
+@app.route('/outbreak')
+def outbreak_page():
+    # Check Kraken2 status via WSL2
+    kraken2_ready = wsl_path_exists('/root/outbreak_investigation/kraken2_db/hash.k2d')
+    return render_template('outbreak.html', kraken2_ready=kraken2_ready,
+                         pathogen_panel=PATHOGEN_PANEL)
+
+
+@app.route('/api/assembly/start', methods=['POST'])
+def start_assembly():
+    """Start a genome assembly job."""
+    files = request.files.getlist('files')
+    if len(files) < 2:
+        return jsonify({'error': 'Please upload 2 files (R1 and R2)'}), 400
+
+    job_id = f"asm_{uuid.uuid4().hex[:8]}"
+    job_dir = UPLOAD_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save files
+    paths = []
+    for f in files:
+        fpath = job_dir / f.filename
+        f.save(str(fpath))
+        paths.append(fpath)
+
+    # Sort to ensure R1, R2 order
+    paths.sort(key=lambda p: p.name)
+
+    threads = int(request.form.get('threads', 16))
+    memory = int(request.form.get('memory', 32))
+
+    jobs[job_id] = {
+        'type': 'assembly',
+        'status': 'queued',
+        'progress': 0,
+        'step': 'Queued',
+        'files': [p.name for p in paths],
+        'created': datetime.now().isoformat(),
+    }
+
+    # Run in background thread
+    t = threading.Thread(
+        target=run_assembly,
+        args=(job_id, str(paths[0]), str(paths[1]), threads, memory),
+        daemon=True
+    )
+    t.start()
+
+    return jsonify({'job_id': job_id, 'status': 'queued'})
+
+
+@app.route('/api/outbreak/start', methods=['POST'])
+def start_outbreak():
+    """Start an outbreak investigation job."""
+    files = request.files.getlist('files')
+    if not files:
+        return jsonify({'error': 'Please upload at least one sample'}), 400
+
+    job_id = f"out_{uuid.uuid4().hex[:8]}"
+    job_dir = UPLOAD_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save files and get metadata
+    sample_files = []
+    sample_metadata = {}
+    for i, f in enumerate(files):
+        fpath = job_dir / f.filename
+        f.save(str(fpath))
+        sample_files.append((f.filename, str(fpath)))
+        stype = request.form.get(f'type_{i}', 'unknown')
+        sample_metadata[i] = stype
+
+    threads = int(request.form.get('threads', 8))
+
+    jobs[job_id] = {
+        'type': 'outbreak',
+        'status': 'queued',
+        'progress': 0,
+        'step': 'Queued',
+        'files': [f[0] for f in sample_files],
+        'created': datetime.now().isoformat(),
+    }
+
+    t = threading.Thread(
+        target=run_outbreak,
+        args=(job_id, sample_files, sample_metadata, threads),
+        daemon=True
+    )
+    t.start()
+
+    return jsonify({'job_id': job_id, 'status': 'queued'})
+
+
+@app.route('/api/job/<job_id>')
+def get_job(job_id):
+    """Get job status and results."""
+    if job_id not in jobs:
+        return jsonify({'error': 'Job not found'}), 404
+    return jsonify(jobs[job_id])
+
+
+@app.route('/api/jobs')
+def list_jobs():
+    """List all jobs."""
+    return jsonify(jobs)
+
+
+@app.route('/results/<job_id>')
+def results_page(job_id):
+    if job_id not in jobs:
+        return redirect(url_for('index'))
+    return render_template('results.html', job_id=job_id)
+
+
+@app.route('/api/results/<job_id>/json')
+def results_json(job_id):
+    """Get results as JSON."""
+    rfile = RESULTS_DIR / job_id / 'results.json'
+    if rfile.exists():
+        with open(rfile) as f:
+            return jsonify(json.load(f))
+    return jsonify({'error': 'No results yet'}), 404
+
+
+@app.route('/api/results/<job_id>/download/<filename>')
+def download_file(job_id, filename):
+    """Download a result file."""
+    fpath = RESULTS_DIR / job_id / filename
+    if fpath.exists():
+        return send_file(str(fpath), as_attachment=True)
+    return jsonify({'error': 'File not found'}), 404
+
+
+@app.route('/api/kraken2/status')
+def kraken2_status():
+    """Check if Kraken2 database is ready (via WSL2)."""
+    db_path = '/root/outbreak_investigation/kraken2_db'
+    ready = wsl_path_exists(f'{db_path}/hash.k2d')
+    size = wsl_dir_size(db_path) if ready else 0
+    return jsonify({
+        'ready': ready,
+        'database_path': db_path,
+        'database_size_gb': round(size / 1024**3, 2),
+    })
+
+
+if __name__ == '__main__':
+    print("=" * 60)
+    print("  BioLab Service — Genome Assembly & Outbreak Investigation")
+    print("=" * 60)
+    print(f"  Results dir: {RESULTS_DIR}")
+    print(f"  Kraken2 DB:  checking...")
+    kraken2_ready = wsl_path_exists('/root/outbreak_investigation/kraken2_db/hash.k2d')
+    print(f"  Kraken2:     {'✅ Ready' if kraken2_ready else '⚠️  Not ready (using minimap2 fallback)'}")
+    print(f"  Access:      http://0.0.0.0:5000")
+    print("=" * 60)
+
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)

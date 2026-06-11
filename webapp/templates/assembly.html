@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Genome Assembly — BioLab</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',-apple-system,system-ui,sans-serif;background:#0f1117;color:#dfe6e9;min-height:100vh}
+.nav{display:flex;align-items:center;gap:20px;padding:15px 30px;background:#15171f;border-bottom:1px solid #2a2d3a}
+.nav a{color:#636e72;text-decoration:none;font-size:.9em}.nav a:hover{color:#6c5ce7}
+.nav .title{color:#fff;font-weight:600;font-size:1.1em}
+.container{max-width:900px;margin:40px auto;padding:0 20px}
+h1{font-size:1.8em;margin-bottom:8px}
+.subtitle{color:#636e72;margin-bottom:30px}
+.card{background:#1a1d27;border:1px solid #2a2d3a;border-radius:12px;padding:30px;margin-bottom:20px}
+.card h2{color:#6c5ce7;font-size:1.1em;margin-bottom:15px}
+.upload-zone{border:2px dashed #2a2d3a;border-radius:12px;padding:50px 20px;text-align:center;cursor:pointer;transition:all .3s}
+.upload-zone:hover,.upload-zone.dragover{border-color:#6c5ce7;background:rgba(108,92,231,.05)}
+.upload-zone .icon{font-size:3em;margin-bottom:10px}
+.upload-zone p{color:#636e72}
+.file-list{margin-top:15px}
+.file-item{display:flex;align-items:center;gap:10px;padding:8px 12px;background:#15171f;border-radius:8px;margin-top:8px;font-size:.9em}
+.file-item .name{flex:1}.file-item .size{color:#636e72}.file-item .remove{color:#e17055;cursor:pointer}
+select,input[type=number]{background:#15171f;border:1px solid #2a2d3a;color:#dfe6e9;padding:8px 12px;border-radius:8px;font-size:.9em}
+.btn{background:linear-gradient(135deg,#6c5ce7,#5a4bd1);color:#fff;border:none;padding:12px 30px;border-radius:10px;font-size:1em;cursor:pointer;font-weight:600;transition:all .3s}
+.btn:hover{transform:translateY(-2px);box-shadow:0 5px 20px rgba(108,92,231,.3)}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.btn-row{display:flex;gap:15px;align-items:center;margin-top:20px}
+.progress-container{margin-top:20px;display:none}
+.progress-bar{height:8px;background:#2a2d3a;border-radius:4px;overflow:hidden}
+.progress-fill{height:100%;background:linear-gradient(90deg,#6c5ce7,#00cec9);width:0%;transition:width .5s}
+.progress-text{margin-top:8px;font-size:.9em;color:#636e72}
+.result-box{display:none;margin-top:20px;background:#15171f;border:1px solid #00b894;border-radius:12px;padding:25px}
+.result-box h3{color:#00b894;margin-bottom:15px}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.stat{background:#1a1d27;padding:15px;border-radius:8px;text-align:center}
+.stat .val{font-size:1.6em;font-weight:700;color:#00cec9}.stat .lbl{font-size:.8em;color:#636e72;margin-top:4px}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <a href="/">← Home</a>
+  <span class="title">🦠 Genome Assembly</span>
+</div>
+
+<div class="container">
+  <h1>Genome Assembly</h1>
+  <p class="subtitle">Upload Illumina paired-end reads (R1 + R2) for de novo genome assembly</p>
+
+  <div class="card">
+    <h2>📁 Upload Files</h2>
+    <div class="upload-zone" id="dropzone">
+      <div class="icon">📂</div>
+      <p>Drag & drop your FASTQ files here<br><small>.fq.gz, .fastq.gz, or .fastq</small></p>
+      <input type="file" id="fileInput" multiple accept=".fq,.fastq,.fq.gz,.fastq.gz" style="display:none">
+    </div>
+    <div class="file-list" id="fileList"></div>
+  </div>
+
+  <div class="card">
+    <h2>⚙️ Settings</h2>
+    <div style="display:flex;gap:20px;flex-wrap:wrap">
+      <div>
+        <label style="font-size:.85em;color:#636e72;display:block;margin-bottom:5px">CPU Threads</label>
+        <input type="number" id="threads" value="16" min="1" max="32">
+      </div>
+      <div>
+        <label style="font-size:.85em;color:#636e72;display:block;margin-bottom:5px">Memory (GB)</label>
+        <input type="number" id="memory" value="32" min="4" max="64">
+      </div>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn" id="startBtn" onclick="startAssembly()" disabled>🚀 Start Assembly</button>
+    <a href="/" style="color:#636e72;font-size:.9em">Cancel</a>
+  </div>
+
+  <div class="progress-container" id="progressBox">
+    <div class="card">
+      <h2>⏳ Processing</h2>
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <p class="progress-text" id="progressText">Starting...</p>
+    </div>
+  </div>
+
+  <div class="result-box" id="resultBox">
+    <h3>✅ Assembly Complete!</h3>
+    <div class="stat-grid" id="resultStats"></div>
+    <div style="margin-top:20px">
+      <a class="btn" id="viewResults" href="#">📊 View Full Report</a>
+    </div>
+  </div>
+</div>
+
+<script>
+const dropzone=document.getElementById('dropzone');
+const fileInput=document.getElementById('fileInput');
+const fileList=document.getElementById('fileList');
+let uploadedFiles=[];
+
+dropzone.onclick=()=>fileInput.click();
+dropzone.ondragover=e=>{e.preventDefault();dropzone.classList.add('dragover')};
+dropzone.ondragleave=()=>dropzone.classList.remove('dragover');
+dropzone.ondrop=e=>{e.preventDefault();dropzone.classList.remove('dragover');handleFiles(e.dataTransfer.files)};
+fileInput.onchange=e=>handleFiles(e.target.files);
+
+function handleFiles(files){
+  for(const f of files){
+    if(!uploadedFiles.find(u=>u.name===f.name)){
+      uploadedFiles.push(f);
+    }
+  }
+  renderFiles();
+}
+
+function renderFiles(){
+  fileList.innerHTML='';
+  uploadedFiles.forEach((f,i)=>{
+    const div=document.createElement('div');
+    div.className='file-item';
+    div.innerHTML=`<span class="name">${f.name}</span><span class="size">${(f.size/1024/1024).toFixed(1)} MB</span><span class="remove" onclick="removeFile(${i})">✕</span>`;
+    fileList.appendChild(div);
+  });
+  document.getElementById('startBtn').disabled=uploadedFiles.length<2;
+}
+
+function removeFile(i){uploadedFiles.splice(i,1);renderFiles()}
+
+let pollTimer=null;
+function startAssembly(){
+  const fd=new FormData();
+  uploadedFiles.forEach(f=>fd.append('files',f));
+  fd.append('threads',document.getElementById('threads').value);
+  fd.append('memory',document.getElementById('memory').value);
+
+  document.getElementById('startBtn').disabled=true;
+  document.getElementById('progressBox').style.display='block';
+
+  fetch('/api/assembly/start',{method:'POST',body:fd})
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.error){alert(d.error);return}
+      pollJob(d.job_id);
+    });
+}
+
+function pollJob(jobId){
+  pollTimer=setInterval(()=>{
+    fetch('/api/job/'+jobId).then(r=>r.json()).then(d=>{
+      document.getElementById('progressFill').style.width=d.progress+'%';
+      document.getElementById('progressText').textContent=d.step+' ('+d.progress+'%)';
+      if(d.status==='completed'){
+        clearInterval(pollTimer);
+        showResults(jobId,d);
+      }else if(d.status==='error'){
+        clearInterval(pollTimer);
+        document.getElementById('progressText').textContent='Error: '+d.error;
+        document.getElementById('progressText').style.color='#e17055';
+      }
+    });
+  },3000);
+}
+
+function showResults(jobId,data){
+  document.getElementById('progressBox').style.display='none';
+  const box=document.getElementById('resultBox');
+  box.style.display='block';
+  document.getElementById('viewResults').href='/results/'+jobId;
+
+  const stats=data.result||{};
+  const asm=stats.assembly||{};
+  const grid=document.getElementById('resultStats');
+  grid.innerHTML=`
+    <div class="stat"><div class="val">${(asm.total_length/1e6||0).toFixed(2)} Mb</div><div class="lbl">Total Length</div></div>
+    <div class="stat"><div class="val">${asm.num_scaffolds||'-'}</div><div class="lbl">Scaffolds</div></div>
+    <div class="stat"><div class="val">${(asm.n50/1e3||0).toFixed(1)} kb</div><div class="lbl">N50</div></div>
+    <div class="stat"><div class="val">${(asm.longest/1e6||0).toFixed(2)} Mb</div><div class="lbl">Longest</div></div>
+    <div class="stat"><div class="val">${asm.gc||'-'}</div><div class="lbl">GC %</div></div>
+  `;
+}
+</script>
+</body>
+</html>

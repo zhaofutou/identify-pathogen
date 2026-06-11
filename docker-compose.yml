@@ -1,0 +1,25 @@
+services:
+  biolab:
+    build: .
+    container_name: biolab
+    ports:
+      - "5050:5050"
+    volumes:
+      # Mount data directories from host
+      - ./outbreak_data:/data/reads:ro
+      # Use already downloaded references from WSL2 host
+      - /root/biolab/refs:/data/refs:ro
+      # Use Kraken2 database from WSL2 host
+      - /root/outbreak_investigation/kraken2_db:/data/kraken2:ro
+      # Persistent volumes for results, work, and uploads
+      - biolab-results:/data/results
+      - biolab-work:/data/work
+      - biolab-uploads:/data/uploads
+    environment:
+      - FLASK_ENV=development
+    restart: unless-stopped
+
+volumes:
+  biolab-results:
+  biolab-work:
+  biolab-uploads:

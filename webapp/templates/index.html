@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BioLab — Genome Assembly & Outbreak Investigation</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',-apple-system,system-ui,sans-serif;background:#0f1117;color:#dfe6e9;min-height:100vh;display:flex;flex-direction:column}
+.hero{text-align:center;padding:80px 20px 60px;background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);border-bottom:2px solid #6c5ce7}
+.hero h1{font-size:2.8em;font-weight:700;background:linear-gradient(90deg,#6c5ce7,#00cec9);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:10px}
+.hero p{color:#636e72;font-size:1.15em;max-width:600px;margin:0 auto}
+.tools{display:flex;gap:30px;justify-content:center;padding:60px 20px;flex-wrap:wrap;max-width:1000px;margin:0 auto}
+.tool-card{background:#1a1d27;border:1px solid #2a2d3a;border-radius:16px;padding:40px;width:420px;text-decoration:none;color:inherit;transition:all .3s}
+.tool-card:hover{border-color:#6c5ce7;transform:translateY(-5px);box-shadow:0 10px 40px rgba(108,92,231,.2)}
+.tool-card .icon{font-size:3em;margin-bottom:20px}
+.tool-card h2{font-size:1.4em;margin-bottom:12px;color:#fff}
+.tool-card p{color:#636e72;font-size:.95em;line-height:1.6}
+.tool-card .badge{display:inline-block;margin-top:15px;padding:5px 14px;border-radius:20px;font-size:.8em;font-weight:600}
+.badge-asm{background:rgba(108,92,231,.15);color:#6c5ce7}
+.badge-out{background:rgba(0,206,201,.15);color:#00cec9}
+.tool-card .features{margin-top:20px;padding-top:15px;border-top:1px solid #2a2d3a}
+.tool-card .features li{color:#636e72;font-size:.85em;padding:4px 0;list-style:none}
+.tool-card .features li::before{content:'→ ';color:#6c5ce7}
+.footer{text-align:center;padding:30px;color:#636e72;font-size:.85em;margin-top:auto;border-top:1px solid #2a2d3a}
+.status-bar{display:flex;justify-content:center;gap:20px;padding:20px;background:#15171f;border-bottom:1px solid #2a2d3a}
+.status-item{font-size:.85em;color:#636e72}
+.status-item .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.dot-green{background:#00b894}.dot-yellow{background:#fdcb6e}.dot-red{background:#e17055}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>🧬 BioLab</h1>
+  <p>Genome assembly, annotation, and pathogen identification service</p>
+</div>
+
+<div class="status-bar">
+  <div class="status-item"><span class="dot dot-green"></span>Service Online</div>
+  <div class="status-item"><span class="dot" id="kraken-dot"></span>Kraken2: <span id="kraken-status">checking...</span></div>
+  <div class="status-item">WSL2 Ubuntu • 32 Cores • 30GB RAM</div>
+</div>
+
+<div class="tools">
+  <a href="/assembly" class="tool-card">
+    <div class="icon">🦠</div>
+    <h2>Genome Assembly</h2>
+    <p>Assemble a bacterial genome from Illumina paired-end reads. Full pipeline: quality check → assembly → evaluation → annotation.</p>
+    <span class="badge badge-asm">Illumina Data</span>
+    <ul class="features">
+      <li>FastQC quality assessment</li>
+      <li>SPAdes de novo assembly</li>
+      <li>QUAST quality evaluation</li>
+      <li>Prokka automatic annotation</li>
+      <li>Reference comparison (MUMmer)</li>
+    </ul>
+  </a>
+
+  <a href="/outbreak?mode=diarrhea" class="tool-card">
+    <div class="icon">💩</div>
+    <h2>Fast Diarrhea Screen</h2>
+    <p>Rapid pathogen screen for common diarrheal pathogens using minimap2 read mapping. Ideal for routine monthly surveillance.</p>
+    <span class="badge badge-out">Nanopore Data</span>
+    <ul class="features">
+      <li>16 common diarrhea pathogens (bacterial + viral)</li>
+      <li>Minimap2 rapid read mapping</li>
+      <li>Fast turnaround (~5 min per sample)</li>
+      <li>Cross-sample comparison</li>
+      <li>Automated suspect identification</li>
+    </ul>
+  </a>
+
+  <a href="/outbreak?mode=kraken2" class="tool-card">
+    <div class="icon">🔬</div>
+    <h2>Pathogen Identification</h2>
+    <p>Comprehensive metagenomic classification using Kraken2. Identifies ALL organisms — bacteria, viruses, fungi, parasites. Not limited to any disease.</p>
+    <span class="badge badge-out">Nanopore Data</span>
+    <ul class="features">
+      <li>Kraken2 full taxonomic classification</li>
+      <li>PLUSPF database (8 GB, all organisms)</li>
+      <li>GI, respiratory, and all pathogen types</li>
+      <li>Detailed species-level identification</li>
+      <li>Comprehensive metagenomic analysis</li>
+    </ul>
+  </a>
+</div>
+
+<div class="footer">
+  BioLab Service v1.0 — Powered by SPAdes, minimap2, Kraken2, Prokka, QUAST
+</div>
+
+<script>
+fetch('/api/kraken2/status').then(r=>r.json()).then(d=>{
+  const dot=document.getElementById('kraken-dot');
+  const st=document.getElementById('kraken-status');
+  if(d.ready){dot.className='dot dot-green';st.textContent='Ready ('+d.database_size_gb+' GB)'}
+  else{dot.className='dot dot-yellow';st.textContent='Downloading ('+d.database_size_gb+' GB)'}
+}).catch(()=>{document.getElementById('kraken-status').textContent='Unknown'});
+</script>
+</body>
+</html>

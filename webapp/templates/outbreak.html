@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Outbreak Investigation — BioLab</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',-apple-system,system-ui,sans-serif;background:#0f1117;color:#dfe6e9;min-height:100vh}
+.nav{display:flex;align-items:center;gap:20px;padding:15px 30px;background:#15171f;border-bottom:1px solid #2a2d3a}
+.nav a{color:#636e72;text-decoration:none;font-size:.9em}.nav a:hover{color:#00cec9}
+.nav .title{color:#fff;font-weight:600;font-size:1.1em}
+.container{max-width:900px;margin:40px auto;padding:0 20px}
+h1{font-size:1.8em;margin-bottom:8px}
+.subtitle{color:#636e72;margin-bottom:30px}
+.card{background:#1a1d27;border:1px solid #2a2d3a;border-radius:12px;padding:30px;margin-bottom:20px}
+.card h2{color:#00cec9;font-size:1.1em;margin-bottom:15px}
+.upload-zone{border:2px dashed #2a2d3a;border-radius:12px;padding:50px 20px;text-align:center;cursor:pointer;transition:all .3s}
+.upload-zone:hover,.upload-zone.dragover{border-color:#00cec9;background:rgba(0,206,201,.05)}
+.upload-zone .icon{font-size:3em;margin-bottom:10px}
+.upload-zone p{color:#636e72}
+.file-list{margin-top:15px}
+.file-item{display:flex;align-items:center;gap:10px;padding:10px 12px;background:#15171f;border-radius:8px;margin-top:8px;font-size:.9em;flex-wrap:wrap}
+.file-item .name{flex:1;min-width:150px}.file-item .size{color:#636e72}
+.file-item select{background:#0f1117;border:1px solid #2a2d3a;color:#dfe6e9;padding:5px 8px;border-radius:6px;font-size:.85em}
+.file-item .remove{color:#e17055;cursor:pointer;padding:0 5px}
+select,input[type=number]{background:#15171f;border:1px solid #2a2d3a;color:#dfe6e9;padding:8px 12px;border-radius:8px;font-size:.9em}
+.btn{background:linear-gradient(135deg,#00cec9,#00b894);color:#fff;border:none;padding:12px 30px;border-radius:10px;font-size:1em;cursor:pointer;font-weight:600;transition:all .3s}
+.btn:hover{transform:translateY(-2px);box-shadow:0 5px 20px rgba(0,206,201,.3)}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.btn-row{display:flex;gap:15px;align-items:center;margin-top:20px}
+.progress-container{margin-top:20px;display:none}
+.progress-bar{height:8px;background:#2a2d3a;border-radius:4px;overflow:hidden}
+.progress-fill{height:100%;background:linear-gradient(90deg,#00cec9,#00b894);width:0%;transition:width .5s}
+.progress-text{margin-top:8px;font-size:.9em;color:#636e72}
+.result-box{display:none;margin-top:20px;background:#15171f;border:1px solid #00b894;border-radius:12px;padding:25px}
+.result-box h3{color:#00b894;margin-bottom:15px}
+table{width:100%;border-collapse:collapse;font-size:.9em}
+th{text-align:left;padding:10px 12px;border-bottom:2px solid #2a2d3a;color:#00cec9;font-weight:600}
+td{padding:8px 12px;border-bottom:1px solid #2a2d3a}
+tr:hover td{background:rgba(0,206,201,.03)}
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:.78em;font-weight:600}
+.badge-hot{background:rgba(225,112,85,.15);color:#e17055}
+.badge-warm{background:rgba(253,203,110,.15);color:#fdcb6e}
+.badge-cold{background:rgba(99,110,114,.15);color:#636e72}
+.kraken2-badge{display:inline-block;padding:4px 10px;border-radius:8px;font-size:.8em;margin-left:10px}
+.kraken2-on{background:rgba(0,184,148,.15);color:#00b894}
+.kraken2-off{background:rgba(253,203,110,.15);color:#fdcb6e}
+.verdict{background:linear-gradient(135deg,rgba(225,112,85,.1),rgba(253,203,110,.05));border:2px solid #e17055;border-radius:12px;padding:25px;margin-top:20px;text-align:center}
+.verdict h3{color:#e17055;font-size:1.3em;margin-bottom:10px}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <a href="/">← Home</a>
+  <span class="title">
+    {% if mode == 'diarrhea' %}💩 Fast Diarrhea Screen{% else %}🔬 Pathogen Identification{% endif %}
+  </span>
+  {% if mode == 'kraken2' %}
+  <span class="kraken2-badge" id="krakenBadge">checking...</span>
+  {% else %}
+  <span class="kraken2-badge kraken2-on">minimap2 Fast Screen</span>
+  {% endif %}
+</div>
+
+<div class="container">
+  <h1>{% if mode == 'diarrhea' %}Fast Diarrhea Screen{% else %}Pathogen Identification{% endif %}</h1>
+  <p class="subtitle">
+    {% if mode == 'diarrhea' %}
+    Rapid screen for common diarrheal pathogens (bacteria + viruses) using minimap2 read mapping
+    {% else %}
+    Comprehensive metagenomic classification using Kraken2 — identifies ALL organisms
+    {% endif %}
+  </p>
+
+  <div class="card">
+    <h2>📁 Upload Samples</h2>
+    <div class="upload-zone" id="dropzone">
+      <div class="icon">📂</div>
+      <p>Drag & drop your FASTQ files here<br><small>One file per sample — .fq, .fastq, .fq.gz, or .fastq.gz</small></p>
+      <input type="file" id="fileInput" multiple accept=".fq,.fastq,.fq.gz,.fastq.gz" style="display:none">
+    </div>
+    <div class="file-list" id="fileList"></div>
+  </div>
+
+  <div class="card">
+    <h2>⚙️ Settings</h2>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:end">
+      <div>
+        <label style="font-size:.85em;color:#636e72;display:block;margin-bottom:5px">CPU Threads</label>
+        <input type="number" id="threads" value="8" min="1" max="32">
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>
+      {% if mode == 'diarrhea' %}🦠 Diarrhea Pathogen Panel ({{ pathogen_panel|length }} targets){% else %}🔬 Detection Method{% endif %}
+    </h2>
+    {% if mode == 'diarrhea' %}
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      {% for name in pathogen_panel %}
+      <span class="badge badge-cold">{{ name|replace('_', ' ') }}</span>
+      {% endfor %}
+    </div>
+    <p style="margin-top:10px;font-size:.85em;color:#636e72">
+      ⚡ Fast minimap2 read mapping against common diarrhea pathogens
+    </p>
+    {% else %}
+    <p style="font-size:.95em;color:#dfe6e9">
+      Kraken2 full taxonomic classification against the PLUSPF database (8 GB).
+      Identifies ALL organisms — bacteria, viruses, fungi, parasites, archaea.
+      Not limited to any specific disease or pathogen type.
+    </p>
+    <p style="margin-top:10px;font-size:.85em;color:#636e72">
+      {% if kraken2_ready %}
+      ✅ Kraken2 database ready — comprehensive metagenomic classification
+      {% else %}
+      ⚠️ Kraken2 database not available — will fall back to minimap2 against reference panel
+      {% endif %}
+    </p>
+    {% endif %}
+  </div>
+
+  <div class="btn-row">
+    <button class="btn" id="startBtn" onclick="startOutbreak()" disabled>
+      {% if mode == 'diarrhea' %}⚡ Start Fast Screen{% else %}🔬 Start Identification{% endif %}
+    </button>
+    <a href="/" style="color:#636e72;font-size:.9em">Cancel</a>
+  </div>
+
+  <div class="progress-container" id="progressBox">
+    <div class="card">
+      <h2>⏳ Analyzing Samples</h2>
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <p class="progress-text" id="progressText">Starting...</p>
+    </div>
+  </div>
+
+  <div class="result-box" id="resultBox">
+    <h3>🔍 Investigation Results</h3>
+    <div id="verdictBox"></div>
+    <table id="resultsTable" style="margin-top:15px">
+      <thead><tr><th>Pathogen</th><th>Positive Samples</th><th>Avg Depth/Reads</th><th>Genome Coverage</th><th>Verdict</th></tr></thead>
+      <tbody id="resultsBody"></tbody>
+    </table>
+    <div style="margin-top:20px">
+      <a class="btn" id="viewResults" href="#">📊 View Full Report</a>
+    </div>
+  </div>
+</div>
+
+<script>
+// Mode from template
+const MODE = '{{ mode }}';
+
+// Check Kraken2 status (only for kraken2 mode)
+if (MODE === 'kraken2') {
+  fetch('/api/kraken2/status').then(r=>r.json()).then(d=>{
+    const b=document.getElementById('krakenBadge');
+    if(d.ready){b.textContent='Kraken2 Ready ('+d.database_size_gb+' GB)';b.className='kraken2-badge kraken2-on'}
+    else{b.textContent='Kraken2 Downloading ('+d.database_size_gb+' GB)';b.className='kraken2-badge kraken2-off'}
+  });
+}
+
+const dropzone=document.getElementById('dropzone');
+const fileInput=document.getElementById('fileInput');
+const fileList=document.getElementById('fileList');
+let uploadedFiles=[];
+
+dropzone.onclick=()=>fileInput.click();
+dropzone.ondragover=e=>{e.preventDefault();dropzone.classList.add('dragover')};
+dropzone.ondragleave=()=>dropzone.classList.remove('dragover');
+dropzone.ondrop=e=>{e.preventDefault();dropzone.classList.remove('dragover');handleFiles(e.dataTransfer.files)};
+fileInput.onchange=e=>handleFiles(e.target.files);
+
+function handleFiles(files){
+  for(const f of files){
+    if(!uploadedFiles.find(u=>u.name===f.name)){
+      uploadedFiles.push({file:f,type:'clinical_stool'});
+    }
+  }
+  renderFiles();
+}
+
+function renderFiles(){
+  fileList.innerHTML='';
+  uploadedFiles.forEach((item,i)=>{
+    const div=document.createElement('div');
+    div.className='file-item';
+    div.innerHTML=`
+      <span class="name">${item.file.name}</span>
+      <span class="size">${(item.file.size/1024/1024).toFixed(1)} MB</span>
+      <select onchange="uploadedFiles[${i}].type=this.value">
+        <option value="clinical_stool" ${item.type==='clinical_stool'?'selected':''}>Clinical Stool</option>
+        <option value="vomit" ${item.type==='vomit'?'selected':''}>Vomit</option>
+        <option value="food" ${item.type==='food'?'selected':''}>Food Sample</option>
+        <option value="water" ${item.type==='water'?'selected':''}>Water</option>
+        <option value="environmental" ${item.type==='environmental'?'selected':''}>Environmental</option>
+      </select>
+      <span class="remove" onclick="removeFile(${i})">✕</span>`;
+    fileList.appendChild(div);
+  });
+  document.getElementById('startBtn').disabled=uploadedFiles.length===0;
+}
+
+function removeFile(i){uploadedFiles.splice(i,1);renderFiles()}
+
+let pollTimer=null;
+function startOutbreak(){
+  const fd=new FormData();
+  uploadedFiles.forEach((item,i)=>{
+    fd.append('files',item.file);
+    fd.append('type_'+i,item.type);
+  });
+  fd.append('threads',document.getElementById('threads').value);
+  fd.append('mode', MODE);
+
+  document.getElementById('startBtn').disabled=true;
+  document.getElementById('progressBox').style.display='block';
+
+  fetch('/api/outbreak/start',{method:'POST',body:fd})
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.error){alert(d.error);return}
+      pollJob(d.job_id);
+    });
+}
+
+function pollJob(jobId){
+  pollTimer=setInterval(()=>{
+    fetch('/api/job/'+jobId).then(r=>r.json()).then(d=>{
+      document.getElementById('progressFill').style.width=d.progress+'%';
+      document.getElementById('progressText').textContent=d.step+' ('+d.progress+'%)';
+      if(d.status==='completed'){
+        clearInterval(pollTimer);
+        showResults(jobId,d);
+      }else if(d.status==='error'){
+        clearInterval(pollTimer);
+        document.getElementById('progressText').textContent='Error: '+d.error;
+        document.getElementById('progressText').style.color='#e17055';
+      }
+    });
+  },3000);
+}
+
+function showResults(jobId,data){
+  document.getElementById('progressBox').style.display='none';
+  const box=document.getElementById('resultBox');
+  box.style.display='block';
+  document.getElementById('viewResults').href='/results/'+jobId;
+
+  const result=data.result||{};
+  const summary=result.summary||{};
+  const samples=result.samples||{};
+
+  const firstSample = Object.values(samples)[0] || {};
+  const isKraken = firstSample.method === 'kraken2';
+  const KNOWN_PATHOGENS = [
+    'salmonella', 'shigella', 'campylobacter', 'vibrio', 'cholerae', 
+    'clostridioides', 'difficile', 'listeria', 'yersinia', 'staphylococcus', 
+    'aureus', 'bacillus cereus', 'aeromonas', 'norovirus', 'rotavirus', 
+    'adenovirus', 'mastadenovirus', 'astrovirus', 'sapovirus', 'escherichia'
+  ];
+
+  // Adjust table headers dynamically for Kraken vs Minimap
+  const resultsTable = document.getElementById('resultsTable');
+  if (isKraken) {
+    resultsTable.querySelector('thead').innerHTML = '<tr><th>Pathogen/Flora</th><th>Positive Samples</th><th>Avg % Reads</th><th>Genome Coverage</th><th>Reads & Depth</th><th>Verdict</th></tr>';
+  } else {
+    resultsTable.querySelector('thead').innerHTML = '<tr><th>Pathogen</th><th>Positive Samples</th><th>Avg Depth</th><th>Genome Coverage</th><th>Mapping Rate</th><th>Verdict</th></tr>';
+  }
+
+  // Show verdict
+  if(summary.suspects&&summary.suspects.length>0){
+    const top=summary.suspects[0];
+    const avgDepth=top.avg_depth||0;
+    const avgCov=top.avg_genome_coverage||0;
+    const avgRate=top.avg_mapping_rate||0;
+    
+    let statsHtml = '';
+    if (isKraken) {
+      statsHtml = `
+        <div><span style="font-size:1.3em;font-weight:700;color:#00cec9">${avgRate.toFixed(2)}%</span><br><small style="color:#636e72">Avg % Reads</small></div>
+        <div><span style="font-size:1.3em;font-weight:700;color:#00cec9">${top.positive_samples}/${summary.total_samples}</span><br><small style="color:#636e72">Positive Samples</small></div>
+      `;
+    } else {
+      statsHtml = `
+        <div><span style="font-size:1.3em;font-weight:700;color:#00cec9">${avgDepth.toFixed(1)}×</span><br><small style="color:#636e72">Avg Depth</small></div>
+        <div><span style="font-size:1.3em;font-weight:700;color:#00cec9">${avgCov.toFixed(1)}%</span><br><small style="color:#636e72">Avg Coverage</small></div>
+        <div><span style="font-size:1.3em;font-weight:700;color:#00cec9">${avgRate.toFixed(1)}%</span><br><small style="color:#636e72">Avg Mapping Rate</small></div>
+      `;
+    }
+
+    document.getElementById('verdictBox').innerHTML=`
+      <div class="verdict">
+        <h3>🔍 Most Likely Culprit: ${top.pathogen.replace(/_/g,' ')}</h3>
+        <p>Detected in ${top.positive_samples} of ${summary.total_samples} samples</p>
+        <div style="display:flex;justify-content:center;gap:30px;margin-top:12px;flex-wrap:wrap">
+          ${statsHtml}
+        </div>
+        <p style="font-size:.85em;color:#636e72;margin-top:8px">Samples: ${top.samples.join(', ')}</p>
+      </div>`;
+  }
+
+  // Build results table
+  const tbody=document.getElementById('resultsBody');
+  tbody.innerHTML='';
+  const allPathogens={};
+  for(const[sname,sdata] of Object.entries(samples)){
+    for(const[pname,pdata] of Object.entries(sdata.pathogens||{})){
+      if(!allPathogens[pname])allPathogens[pname]={depths:[],rates:[],covs:[],reads:[],samples:[]};
+      allPathogens[pname].depths.push(pdata.avg_depth||pdata.percentage||0);
+      allPathogens[pname].rates.push(pdata.mapping_rate||pdata.percentage||0);
+      allPathogens[pname].covs.push(pdata.genome_coverage||0);
+      allPathogens[pname].reads.push(pdata.reads||0);
+      allPathogens[pname].samples.push(sname);
+    }
+  }
+
+  // Sort: Pathogens first, then by abundance descending
+  const sorted=Object.entries(allPathogens).sort((a,b)=>{
+    const isPathogenA = KNOWN_PATHOGENS.some(p => a[0].toLowerCase().includes(p));
+    const isPathogenB = KNOWN_PATHOGENS.some(p => b[0].toLowerCase().includes(p));
+    
+    if (isPathogenA && !isPathogenB) return -1;
+    if (!isPathogenA && isPathogenB) return 1;
+    
+    const avgA=a[1].depths.reduce((s,v)=>s+v,0)/a[1].depths.length;
+    const avgB=b[1].depths.reduce((s,v)=>s+v,0)/b[1].depths.length;
+    return avgB-avgA;
+  });
+
+  for(const[pname,data] of sorted){
+    const avgDepthVal=data.depths.reduce((s,v)=>s+v,0)/data.depths.length;
+    const avgRateVal=data.rates.reduce((s,v)=>s+v,0)/data.rates.length;
+    const avgCovVal=data.covs.reduce((s,v)=>s+v,0)/data.covs.length;
+    const avgReads=Math.round(data.reads.reduce((s,v)=>s+v,0)/data.reads.length);
+    const nSamples=data.samples.length;
+    
+    const isPathogen = KNOWN_PATHOGENS.some(p => pname.toLowerCase().includes(p));
+    
+    let badge='badge-cold';
+    let verdict='Negative';
+    let displayDepth = isKraken ? `${avgRateVal.toFixed(2)}%` : `${avgDepthVal.toFixed(1)}×`;
+    
+    let displayCov = '';
+    let displayDetails = '';
+    if (isKraken) {
+      displayCov = avgCovVal > 0 ? `${avgCovVal.toFixed(1)}%` : '0.0%';
+      displayDetails = avgCovVal > 0 ? `${avgReads.toLocaleString()} reads (${avgDepthVal.toFixed(1)}x depth)` : `${avgReads.toLocaleString()} reads`;
+    } else {
+      displayCov = `${avgCovVal.toFixed(1)}%`;
+      displayDetails = `${avgRateVal.toFixed(1)}%`;
+    }
+
+    if (isKraken) {
+      const isVirus = ['virus', 'adenovirus', 'mastadenovirus', 'astrovirus', 'sapovirus', 'rotavirus', 'norovirus'].some(v => pname.toLowerCase().includes(v));
+      const threshold = isVirus ? 0.5 : 2.0;
+      
+      if (isPathogen) {
+        if (avgCovVal > 0) {
+          if (avgCovVal > 10.0) {
+            if (avgRateVal > threshold * 5) {
+              badge = 'badge-hot';
+              verdict = '🔴 STRONG HIT';
+            } else {
+              badge = 'badge-warm';
+              verdict = '🟡 Positive';
+            }
+          } else {
+            badge = 'badge-cold';
+            verdict = 'Normal Flora / Homology (Low Cov)';
+          }
+        } else {
+          if (avgRateVal > threshold * 5) {
+            badge = 'badge-hot';
+            verdict = '🔴 STRONG HIT';
+          } else if (avgRateVal > threshold) {
+            badge = 'badge-warm';
+            verdict = '🟡 Positive';
+          } else {
+            badge = 'badge-warm';
+            verdict = '🟡 Weak/Carrier';
+          }
+        }
+      } else {
+        if (avgRateVal > 10.0) {
+          badge = 'badge-cold';
+          verdict = 'Normal Flora (High)';
+        } else {
+          badge = 'badge-cold';
+          verdict = 'Normal Flora';
+        }
+      }
+    } else {
+      if(avgDepthVal>100){badge='badge-hot';verdict='🔴 STRONG'}
+      else if(avgDepthVal>10){badge='badge-warm';verdict='🟡 Possible'}
+      else if(nSamples>=2){badge='badge-warm';verdict='🟡 Weak'}
+    }
+
+    tbody.innerHTML+=`<tr>
+      <td>${pname.replace(/_/g,' ')}</td>
+      <td>${nSamples}/${summary.total_samples}</td>
+      <td>${displayDepth}</td>
+      <td>${displayCov}</td>
+      <td>${displayDetails}</td>
+      <td><span class="badge ${badge}">${verdict}</span></td>
+    </tr>`;
+  }
+}
+</script>
+</body>
+</html>

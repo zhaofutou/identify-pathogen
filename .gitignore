@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Large installer executables
+miniconda_installer.exe
+
+# Raw sequencing datasets and test data (large files)
+*.fq.gz
+*.fastq.gz
+*.sra
+outbreak_data/
+
+# Web application data (local work dirs, uploads, results)
+biolab_data/
+outbreak_results/
+
+# Temporary and alignment files
+*.sam
+*.bam
+*.bai
+*.log
+tmp_*/
+
+# IDE and system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
