@@ -11,6 +11,7 @@ miniconda_installer.exe
 *.fastq.gz
 *.sra
 outbreak_data/
+kraken2_db/
 
 # Web application data (local work dirs, uploads, results)
 biolab_data/
