@@ -30,7 +30,7 @@ A **Flask web application** (`webapp/app_docker.py`, running as `app.py` in the 
 2. **Path Translation & Permissions**: Native docker-compose volumes are used for uploads, work, and results to avoid slow, buggy Windows-to-Linux path translation (`/mnt/c` bind mounts) and permissions errors.
 3. **Reference Genomes & Kraken2 DB**:
    * Pre-downloaded fasta references from the WSL2 host (`/root/biolab/refs`) are mounted read-only into `/data/refs` to avoid slow, rate-limited NCBI downloads.
-   * The 8 GB Kraken2 database from `/root/outbreak_investigation/kraken2_db` is mounted read-only into `/data/kraken2`.
+   * The 8 GB Kraken2 database is stored locally in the project directory (`C:\Users\rdpuser\bacterial_assemble\kraken2_db`) and mounted read-only into `/data/kraken2`.
 
 ---
 
@@ -61,21 +61,18 @@ The pipeline is invoked in a background thread via `run_assembly()` inside [app_
 C:\Users\rdpuser\bacterial_assemble\
 ├── webapp/
 │   ├── app_docker.py             ← Main Flask app (Docker Edition, hybrid validation, pathogen sorting)
-│   ├── app.py                    ← Old host-based Flask app (deprecated Windows/WSL bridge)
 │   └── templates/
 │       ├── index.html            ← Landing home page
 │       ├── assembly.html         ← Genome assembly page
 │       ├── outbreak.html         ← Outbreak screening (dynamic headers, reads count, coverage)
 │       └── results.html          ← Job results reporting
+├── kraken2_db/                 ← The 8 GB Kraken2 database folder (ignored by Git)
 ├── Dockerfile                    ← Ubuntu 22.04 + minimap2 + samtools + bedtools + kraken2 + fastqc + spades + prokka + quast
 ├── docker-compose.yml            ← Compose config (ports, volume mounts for reads, refs, kraken2 db, and uploads)
 ├── entrypoint.sh                 ← Container entrypoint (web/shell/test modes)
 ├── run_biolab.bat                ← Start script (launches WSL2 keep-alive, docker-compose up, and downs container on close)
 ├── pathogen_panel.py             ← Standalone pathogen panel script
 ├── run_outbreak_test.py          ← Working direct-WSL2 test mapping script
-├── summarize_results.py          ← Script to print results summary
-├── build_kraken2_db.sh           ← Script to build Kraken2 database
-├── convert_sra.sh                ← Script to convert SRA to FASTQ
 ├── enable_wsl.bat                ← Host setup script (WSL and VM platform enable)
 └── PROJECT_SUMMARY.md            ← This document
 ```
